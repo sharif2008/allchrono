@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: allchrono
+      POSTGRES_PASSWORD: allchrono
+      POSTGRES_DB: allchrono
+    # Host port 5433 avoids clashing with a local Postgres on 5432.
+    # (Container-internal port stays 5432, so the api service is unaffected.)
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U allchrono -d allchrono"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Shared secrets/config from the backend env file (optional; code has defaults).
+    env_file:
+      - path: apps/api/.env
+        required: false
+    # Networking overrides for the container network (win over env_file).
+    environment:
+      DATABASE_URL: postgresql://allchrono:allchrono@postgres:5432/allchrono?schema=public
+      API_PORT: 3001
+      WEB_ORIGIN: http://localhost:3000
+    ports:
+      - "3001:3001"
+    # Apply schema, seed demo data, then boot the API.
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed && node dist/main.js"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    env_file:
+      - path: apps/web/.env
+        required: false
+    environment:
+      # Browser talks to the API on the host-published port.
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+      # Server Components (inside the container network) reach the API by service name.
+      API_INTERNAL_URL: http://api:3001
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+    driver: local

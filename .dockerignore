@@ -1,0 +1,21 @@
+# Build context is the repo root for both apps/api and apps/web Dockerfiles.
+# Never copy host-installed dependencies or build output into the image.
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/.turbo
+
+# local env & vcs
+**/.env
+**/.env.local
+.git
+.gitignore
+
+# prisma generated client (regenerated inside the image)
+**/.prisma
+apps/api/node_modules/.prisma
+
+# misc
+**/*.log
+**/.DS_Store

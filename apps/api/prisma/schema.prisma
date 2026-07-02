@@ -1,0 +1,265 @@
+// AllChrono — Verified Trade Pipeline
+// Prisma schema. See docs/adr/001-orm-choice.md for the ORM decision.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  BUYER
+  SELLER
+  AUTHENTICATOR
+  ADMIN
+}
+
+enum KycStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum WatchStatus {
+  UNLISTED
+  LISTED
+  IN_TRADE
+  SOLD
+}
+
+// The full trade lifecycle. Do NOT add states here without updating the
+// domain state machine (trade.entity.ts) and the terminal-state migration.
+enum TradeState {
+  DRAFT
+  PENDING_AUTH
+  AUTH_PASSED
+  AUTH_FAILED
+  ESCROW_FUNDED
+  SHIPPED
+  DELIVERED
+  DISPUTED
+  RELEASED
+  REFUNDED_PRE_SHIP
+  REFUNDED_POST_DELIVERY
+  EXPIRED
+  CANCELLED
+  LOST_IN_TRANSIT
+}
+
+enum Verdict {
+  PASS
+  FAIL
+  INCONCLUSIVE
+}
+
+enum EscrowType {
+  FUND
+  RELEASE
+  REFUND
+}
+
+enum EscrowStatus {
+  SUCCESS
+  FAILED
+  PENDING
+}
+
+enum ShipmentStatus {
+  CREATED
+  IN_TRANSIT
+  DELIVERED
+  LOST
+}
+
+enum LedgerType {
+  AUTHENTICATED
+  SERVICED
+  TRANSFERRED
+  RE_AUTHENTICATED
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  roles        Role[]
+  kycStatus    KycStatus @default(VERIFIED)
+  // Simulated internal escrow balance credited only on RELEASE.
+  balance      Decimal   @default(1000) @db.Decimal(14, 2)
+  createdAt    DateTime  @default(now())
+
+  watches       Watch[]               @relation("SellerWatches")
+  tradesAsSeller Trade[]              @relation("SellerTrades")
+  tradesAsBuyer  Trade[]              @relation("BuyerTrades")
+  authReports   AuthenticationReport[]
+
+  @@map("users")
+}
+
+model Watch {
+  id                String      @id @default(uuid())
+  sellerId          String
+  brand             String
+  model             String
+  referenceNumber   String
+  serialFingerprint String      @unique
+  askingPrice       Decimal     @db.Decimal(14, 2)
+  condition         String
+  listingPhotos     String[]
+  status            WatchStatus @default(UNLISTED)
+  currentPassportId String?     @unique
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  seller   User      @relation("SellerWatches", fields: [sellerId], references: [id])
+  passport Passport? @relation("WatchPassport", fields: [currentPassportId], references: [id])
+  trades   Trade[]
+
+  @@index([status])
+  @@map("watches")
+}
+
+model Trade {
+  id                String     @id @default(uuid())
+  watchId           String
+  sellerId          String
+  buyerId           String
+  state             TradeState @default(DRAFT)
+  grossAmount       Decimal    @db.Decimal(14, 2)
+  commissionAmount  Decimal    @db.Decimal(14, 2)
+  sellerNetAmount   Decimal    @db.Decimal(14, 2)
+  // Denormalized pointers, kept in sync by the application service.
+  authReportId      String?
+  shipmentId        String?
+  authPassedAt      DateTime?
+  escrowDueAt       DateTime?
+  disputeDeadline   DateTime?
+  releasedAt        DateTime?
+  cancelledAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  watch   Watch @relation(fields: [watchId], references: [id])
+  seller  User  @relation("SellerTrades", fields: [sellerId], references: [id])
+  buyer   User  @relation("BuyerTrades", fields: [buyerId], references: [id])
+
+  authReport         AuthenticationReport?
+  shipment           ShipmentRecord?
+  escrowTransactions EscrowTransaction[]
+  stateHistory       TradeStateHistory[]
+  idempotencyKeys    IdempotencyKey[]
+
+  @@index([watchId])
+  @@index([buyerId])
+  @@index([sellerId])
+  @@map("trades")
+}
+
+model AuthenticationReport {
+  id              String   @id @default(uuid())
+  tradeId         String   @unique
+  authenticatorId String
+  verdict         Verdict
+  notes           String?
+  photoHashes     String[]
+  createdAt       DateTime @default(now())
+
+  trade        Trade @relation(fields: [tradeId], references: [id])
+  authenticator User @relation(fields: [authenticatorId], references: [id])
+
+  @@map("authentication_reports")
+}
+
+model EscrowTransaction {
+  id             String       @id @default(uuid())
+  tradeId        String
+  type           EscrowType
+  amount         Decimal      @db.Decimal(14, 2)
+  status         EscrowStatus @default(SUCCESS)
+  idempotencyKey String?
+  createdAt      DateTime     @default(now())
+
+  trade Trade @relation(fields: [tradeId], references: [id])
+
+  @@index([tradeId])
+  @@map("escrow_transactions")
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  key          String   @unique
+  tradeId      String?
+  endpoint     String
+  requestHash  String
+  responseJson Json
+  statusCode   Int
+  createdAt    DateTime @default(now())
+
+  trade Trade? @relation(fields: [tradeId], references: [id])
+
+  @@map("idempotency_keys")
+}
+
+model ShipmentRecord {
+  id             String         @id @default(uuid())
+  tradeId        String         @unique
+  trackingNumber String
+  shippedAt      DateTime?
+  deliveredAt    DateTime?
+  status         ShipmentStatus @default(CREATED)
+
+  trade Trade @relation(fields: [tradeId], references: [id])
+
+  @@map("shipment_records")
+}
+
+model TradeStateHistory {
+  id           String      @id @default(uuid())
+  tradeId      String
+  fromState    TradeState?
+  toState      TradeState
+  action       String
+  actorId      String?
+  metadataJson Json?
+  createdAt    DateTime    @default(now())
+
+  trade Trade @relation(fields: [tradeId], references: [id])
+
+  @@index([tradeId])
+  @@map("trade_state_history")
+}
+
+model Passport {
+  id                String   @id @default(uuid())
+  watchId           String   @unique
+  serialFingerprint String   @unique
+  createdAt         DateTime @default(now())
+
+  entries LedgerEntry[]
+  watch   Watch?        @relation("WatchPassport")
+
+  @@map("passports")
+}
+
+// Append-only. There is NO update/delete path in application code.
+model LedgerEntry {
+  id          String     @id @default(uuid())
+  passportId  String
+  sequenceNo  Int
+  type        LedgerType
+  payloadJson Json
+  prevHash    String?
+  thisHash    String
+  signer      String
+  signature   String
+  createdAt   DateTime   @default(now())
+
+  passport Passport @relation(fields: [passportId], references: [id])
+
+  @@unique([passportId, sequenceNo])
+  @@index([passportId])
+  @@map("ledger_entries")
+}

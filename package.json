@@ -1,0 +1,23 @@
+{
+  "name": "allchrono",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AllChrono — The Verified Trade Pipeline (NestJS + Next.js monorepo)",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"pnpm --filter @allchrono/api dev\" \"pnpm --filter @allchrono/web dev\"",
+    "dev:local": "bash scripts/dev.sh",
+    "build": "pnpm --filter @allchrono/api build && pnpm --filter @allchrono/web build",
+    "db:generate": "pnpm --filter @allchrono/api prisma:generate",
+    "db:migrate": "pnpm --filter @allchrono/api prisma:migrate",
+    "db:seed": "pnpm --filter @allchrono/api prisma:seed",
+    "test": "pnpm --filter @allchrono/api test",
+    "lint": "pnpm --filter @allchrono/api lint"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "packageManager": "pnpm@9.1.0"
+}
